@@ -77,8 +77,12 @@ func (rs *resourceService) Create(ctx context.Context, req *interfaces.ResourceR
 	}
 
 	now := time.Now().UnixMilli()
+	id := req.ID
+	if id == "" {
+		id = xid.New().String()
+	}
 	resource := &interfaces.Resource{
-		ID:               xid.New().String(),
+		ID:               id,
 		CatalogID:        req.CatalogID,
 		Name:             req.Name,
 		Tags:             req.Tags,
@@ -231,7 +235,7 @@ func (rs *resourceService) List(ctx context.Context, params interfaces.Resources
 	ctx, span := ar_trace.Tracer.Start(ctx, "List resources")
 	defer span.End()
 
-	resourcesArr, total, err := rs.ra.List(ctx, params)
+	resourcesArr, _, err := rs.ra.List(ctx, params)
 	if err != nil {
 		span.SetStatus(codes.Error, "List resources failed")
 		return []*interfaces.Resource{}, 0, rest.NewHTTPError(ctx, http.StatusInternalServerError, verrors.VegaBackend_Resource_InternalError_GetFailed).
@@ -260,7 +264,7 @@ func (rs *resourceService) List(ctx context.Context, params interfaces.Resources
 			resources = append(resources, c)
 		}
 	}
-	total = int64(len(resources))
+	total := int64(len(resources))
 
 	// limit = -1,则返回所有
 	if params.Limit != -1 {
