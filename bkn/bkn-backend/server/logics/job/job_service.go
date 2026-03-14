@@ -169,7 +169,7 @@ func (js *jobService) CreateJob(ctx context.Context, jobInfo *interfaces.JobInfo
 			}
 			if len(objectType.PrimaryKeys) == 0 {
 				return "", rest.NewHTTPError(ctx, http.StatusBadRequest,
-					oerrors.OntologyManager_Job_InvalidObjectType).
+					berrors.BknBackend_Job_InvalidObjectType).
 					WithErrorDetails(fmt.Sprintf("ObjectType %s has no primary key", objectType.OTName))
 			}
 			if !objectTypeIDs[objectType.OTID] {
