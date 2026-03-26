@@ -17,20 +17,19 @@ paths:
       parameters:
         - name: x-account-id
           in: header
-          required: true
+          required: false
           schema:
             type: string
           description: 账户ID，用于内部服务调用时传递账户信息
         - name: x-account-type
           in: header
-          required: true
+          required: false
           schema:
             type: string
             enum:
               - user
               - app
               - anonymous
-            default: user
           description: 账户类型：user(用户), app(应用), anonymous(匿名)
         - name: response_format
           in: query
@@ -119,8 +118,6 @@ components:
     SemanticSearchResponse:
       type: object
       properties:
-        query_understanding:
-          $ref: "#/components/schemas/QueryUnderstanding"
         concepts:
           type: array
           items:
@@ -240,29 +237,6 @@ components:
             - $ref: "#/components/schemas/ObjectTypeDetail"
             - $ref: "#/components/schemas/RelationTypeDetail"
             - $ref: "#/components/schemas/ActionTypeDetail"
-        intent_score:
-          type: number
-          format: float
-          minimum: 0
-          maximum: 1
-          description: 意图得分
-        match_score:
-          type: number
-          format: float
-          minimum: 0
-          maximum: 1
-          description: 匹配得分
-        rerank_score:
-          type: number
-          format: float
-          minimum: 0
-          maximum: 1
-          description: 重排序得分
-        samples:
-          type: array
-          items:
-            type: object
-          description: 实例样本列表
 
     ErrorResponse:
       type: object

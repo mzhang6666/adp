@@ -190,10 +190,10 @@ func TestGetActionInfo_ToolType_Success(t *testing.T) {
 		mockLogger.EXPECT().WithContext(gomock.Any()).Return(mockLogger).AnyTimes()
 
 		cfg := &config.Config{
-			OperatorIntegration: config.PrivateBaseConfig{
+			OntologyQuery: config.PrivateBaseConfig{
 				PrivateProtocol: "http",
-				PrivateHost:     "localhost",
-				PrivatePort:     8080,
+				PrivateHost:     "ontology-query",
+				PrivatePort:     13018,
 			},
 		}
 
@@ -231,20 +231,21 @@ func TestGetActionInfo_ToolType_Success(t *testing.T) {
 				Description: "Test tool description",
 				Metadata: interfaces.ToolMetadata{
 					APISpec: map[string]interface{}{
-						"paths": map[string]interface{}{
-							"/test": map[string]interface{}{
-								"post": map[string]interface{}{
-									"parameters": []interface{}{},
-									"requestBody": map[string]interface{}{
-										"content": map[string]interface{}{
-											"application/json": map[string]interface{}{
-												"schema": map[string]interface{}{
-													"type": "object",
-													"properties": map[string]interface{}{
-														"name": map[string]interface{}{"type": "string"},
-													},
-												},
-											},
+						"parameters": []interface{}{
+							map[string]interface{}{
+								"name":     "pod_name",
+								"in":       "query",
+								"required": true,
+								"schema":   map[string]interface{}{"type": "string"},
+							},
+						},
+						"request_body": map[string]interface{}{
+							"content": map[string]interface{}{
+								"application/json": map[string]interface{}{
+									"schema": map[string]interface{}{
+										"type": "object",
+										"properties": map[string]interface{}{
+											"namespace": map[string]interface{}{"type": "string"},
 										},
 									},
 								},
@@ -258,8 +259,114 @@ func TestGetActionInfo_ToolType_Success(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldNotBeNil)
 		convey.So(len(resp.DynamicTools), convey.ShouldEqual, 1)
-		convey.So(resp.DynamicTools[0].Name, convey.ShouldEqual, "TestTool")
-		convey.So(resp.DynamicTools[0].APICallStrategy, convey.ShouldEqual, interfaces.ResultProcessStrategyKnActionRecall)
+
+		tool := resp.DynamicTools[0]
+		convey.So(tool.Name, convey.ShouldEqual, "TestTool")
+		convey.So(tool.APICallStrategy, convey.ShouldEqual, interfaces.ResultProcessStrategyKnActionRecall)
+		convey.So(tool.OriginalSchema, convey.ShouldBeNil)
+
+		// 验证 api_url 指向行动驱动执行接口
+		convey.So(tool.APIURL, convey.ShouldEqual,
+			"http://ontology-query:13018/api/ontology-query/in/v1/knowledge-networks/kn-001/action-types/at-001/execute")
+
+		// 验证 parameters 顶层为 dynamic_params + _instance_identities
+		params := tool.Parameters
+		convey.So(params["type"], convey.ShouldEqual, "object")
+		props := params["properties"].(map[string]interface{})
+		convey.So(props["dynamic_params"], convey.ShouldNotBeNil)
+		convey.So(props["_instance_identities"], convey.ShouldNotBeNil)
+
+		// 验证 dynamic_params 中包含去壳后的参数
+		dynamicParams := props["dynamic_params"].(map[string]interface{})
+		dynamicProps := dynamicParams["properties"].(map[string]interface{})
+		convey.So(dynamicProps["pod_name"], convey.ShouldNotBeNil)
+		convey.So(dynamicProps["namespace"], convey.ShouldNotBeNil)
+
+		// 验证 fixed_params 为 ActionDriverFixedParams 结构
+		fixedParams, ok := tool.FixedParams.(interfaces.ActionDriverFixedParams)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(fixedParams.DynamicParams["param1"], convey.ShouldEqual, "value1")
+		convey.So(len(fixedParams.InstanceIdentities), convey.ShouldEqual, 1)
+		convey.So(fixedParams.InstanceIdentities[0]["id"], convey.ShouldEqual, "obj-001")
+	})
+}
+
+// TestGetActionInfo_WithoutInstanceIdentity_Success 测试 _instance_identity 非必传时的成功路径
+func TestGetActionInfo_WithoutInstanceIdentity_Success(t *testing.T) {
+	convey.Convey("TestGetActionInfo_WithoutInstanceIdentity_Success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockLogger := mocks.NewMockLogger(ctrl)
+		mockOntologyQuery := mocks.NewMockDrivenOntologyQuery(ctrl)
+		mockOperatorIntegration := mocks.NewMockDrivenOperatorIntegration(ctrl)
+
+		mockLogger.EXPECT().WithContext(gomock.Any()).Return(mockLogger).AnyTimes()
+
+		cfg := &config.Config{
+			OntologyQuery: config.PrivateBaseConfig{
+				PrivateProtocol: "http",
+				PrivateHost:     "ontology-query",
+				PrivatePort:     13018,
+			},
+		}
+
+		service := &knActionRecallServiceImpl{
+			logger:              mockLogger,
+			config:              cfg,
+			ontologyQuery:       mockOntologyQuery,
+			operatorIntegration: mockOperatorIntegration,
+		}
+
+		ctx := context.Background()
+		req := &interfaces.KnActionRecallRequest{
+			KnID: "kn-001",
+			AtID: "at-001",
+		}
+
+		mockOntologyQuery.EXPECT().QueryActions(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, actionsReq *interfaces.QueryActionsRequest) (*interfaces.QueryActionsResponse, error) {
+				convey.So(actionsReq.InstanceIdentities, convey.ShouldNotBeNil)
+				convey.So(len(actionsReq.InstanceIdentities), convey.ShouldEqual, 0)
+				return &interfaces.QueryActionsResponse{
+					ActionSource: &interfaces.ActionSource{
+						Type:   interfaces.ActionSourceTypeTool,
+						BoxID:  "box-001",
+						ToolID: "tool-001",
+					},
+					Actions: []interfaces.ActionParams{
+						{Parameters: map[string]interface{}{"param1": "value1"}},
+					},
+				}, nil
+			})
+
+		mockOperatorIntegration.EXPECT().GetToolDetail(gomock.Any(), gomock.Any()).
+			Return(&interfaces.GetToolDetailResponse{
+				Name:        "TestTool",
+				Description: "Test tool description",
+				Metadata: interfaces.ToolMetadata{
+					APISpec: map[string]interface{}{
+						"parameters": []interface{}{
+							map[string]interface{}{
+								"name":     "pod_name",
+								"in":       "query",
+								"required": true,
+								"schema":   map[string]interface{}{"type": "string"},
+							},
+						},
+					},
+				},
+			}, nil)
+
+		resp, err := service.GetActionInfo(ctx, req)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(resp, convey.ShouldNotBeNil)
+		convey.So(len(resp.DynamicTools), convey.ShouldEqual, 1)
+
+		fixedParams, ok := resp.DynamicTools[0].FixedParams.(interfaces.ActionDriverFixedParams)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(fixedParams.DynamicParams["param1"], convey.ShouldEqual, "value1")
+		convey.So(len(fixedParams.InstanceIdentities), convey.ShouldEqual, 0)
 	})
 }
 
@@ -276,9 +383,10 @@ func TestGetActionInfo_MCPType_Success(t *testing.T) {
 		mockLogger.EXPECT().WithContext(gomock.Any()).Return(mockLogger).AnyTimes()
 
 		cfg := &config.Config{
-			Project: config.Project{
-				Name: "agent-retrieval",
-				Port: 8080,
+			OntologyQuery: config.PrivateBaseConfig{
+				PrivateProtocol: "http",
+				PrivateHost:     "ontology-query",
+				PrivatePort:     13018,
 			},
 		}
 
@@ -317,8 +425,9 @@ func TestGetActionInfo_MCPType_Success(t *testing.T) {
 				InputSchema: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"name": map[string]interface{}{"type": "string"},
+						"disease_id": map[string]interface{}{"type": "string"},
 					},
+					"required": []interface{}{"disease_id"},
 				},
 			}, nil)
 
@@ -326,8 +435,34 @@ func TestGetActionInfo_MCPType_Success(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(resp, convey.ShouldNotBeNil)
 		convey.So(len(resp.DynamicTools), convey.ShouldEqual, 1)
-		convey.So(resp.DynamicTools[0].Name, convey.ShouldEqual, "TestMCPTool")
-		convey.So(resp.DynamicTools[0].APICallStrategy, convey.ShouldEqual, interfaces.ResultProcessStrategyKnActionRecall)
+
+		tool := resp.DynamicTools[0]
+		convey.So(tool.Name, convey.ShouldEqual, "TestMCPTool")
+		convey.So(tool.APICallStrategy, convey.ShouldEqual, interfaces.ResultProcessStrategyKnActionRecall)
+		convey.So(tool.OriginalSchema, convey.ShouldBeNil)
+
+		// 验证 api_url 指向行动驱动执行接口
+		convey.So(tool.APIURL, convey.ShouldEqual,
+			"http://ontology-query:13018/api/ontology-query/in/v1/knowledge-networks/kn-001/action-types/at-001/execute")
+
+		// 验证 parameters 顶层为 dynamic_params + _instance_identities
+		params := tool.Parameters
+		convey.So(params["type"], convey.ShouldEqual, "object")
+		props := params["properties"].(map[string]interface{})
+		convey.So(props["dynamic_params"], convey.ShouldNotBeNil)
+		convey.So(props["_instance_identities"], convey.ShouldNotBeNil)
+
+		// 验证 dynamic_params 中包含 MCP schema 参数
+		dynamicParams := props["dynamic_params"].(map[string]interface{})
+		dynamicProps := dynamicParams["properties"].(map[string]interface{})
+		convey.So(dynamicProps["disease_id"], convey.ShouldNotBeNil)
+
+		// 验证 fixed_params 为 ActionDriverFixedParams 结构
+		fixedParams, ok := tool.FixedParams.(interfaces.ActionDriverFixedParams)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(fixedParams.DynamicParams["param1"], convey.ShouldEqual, "value1")
+		convey.So(len(fixedParams.InstanceIdentities), convey.ShouldEqual, 1)
+		convey.So(fixedParams.InstanceIdentities[0]["id"], convey.ShouldEqual, "obj-001")
 	})
 }
 
@@ -526,4 +661,417 @@ func TestActionSourceMCPFields(t *testing.T) {
 	if actionSource.ToolName != "test-tool-name" {
 		t.Error("ActionSource.ToolName 应该为 'test-tool-name'")
 	}
+}
+
+// ==================== _instance_identities 合并逻辑测试 ====================
+
+// TestGetActionInfo_InstanceIdentities_MultipleValid 测试传入多个有效 _instance_identities
+func TestGetActionInfo_InstanceIdentities_MultipleValid(t *testing.T) {
+	convey.Convey("TestGetActionInfo_InstanceIdentities_MultipleValid", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockLogger := mocks.NewMockLogger(ctrl)
+		mockOntologyQuery := mocks.NewMockDrivenOntologyQuery(ctrl)
+		mockOperatorIntegration := mocks.NewMockDrivenOperatorIntegration(ctrl)
+
+		mockLogger.EXPECT().WithContext(gomock.Any()).Return(mockLogger).AnyTimes()
+
+		cfg := &config.Config{
+			OntologyQuery: config.PrivateBaseConfig{
+				PrivateProtocol: "http",
+				PrivateHost:     "ontology-query",
+				PrivatePort:     13018,
+			},
+		}
+
+		service := &knActionRecallServiceImpl{
+			logger:              mockLogger,
+			config:              cfg,
+			ontologyQuery:       mockOntologyQuery,
+			operatorIntegration: mockOperatorIntegration,
+		}
+
+		ctx := context.Background()
+		req := &interfaces.KnActionRecallRequest{
+			KnID: "kn-001",
+			AtID: "at-001",
+			InstanceIdentities: []map[string]any{
+				{"code": "A"},
+				{"code": "B"},
+			},
+		}
+
+		mockOntologyQuery.EXPECT().QueryActions(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, actionsReq *interfaces.QueryActionsRequest) (*interfaces.QueryActionsResponse, error) {
+				convey.So(len(actionsReq.InstanceIdentities), convey.ShouldEqual, 2)
+				convey.So(actionsReq.InstanceIdentities[0]["code"], convey.ShouldEqual, "A")
+				convey.So(actionsReq.InstanceIdentities[1]["code"], convey.ShouldEqual, "B")
+				return &interfaces.QueryActionsResponse{
+					ActionSource: &interfaces.ActionSource{
+						Type:   interfaces.ActionSourceTypeTool,
+						BoxID:  "box-001",
+						ToolID: "tool-001",
+					},
+					Actions: []interfaces.ActionParams{
+						{Parameters: map[string]any{"param1": "value1"}},
+					},
+				}, nil
+			})
+
+		mockOperatorIntegration.EXPECT().GetToolDetail(gomock.Any(), gomock.Any()).
+			Return(&interfaces.GetToolDetailResponse{
+				Name:        "TestTool",
+				Description: "Test tool description",
+				Metadata: interfaces.ToolMetadata{
+					APISpec: map[string]any{
+						"parameters": []any{
+							map[string]any{
+								"name":     "pod_name",
+								"in":       "query",
+								"required": true,
+								"schema":   map[string]any{"type": "string"},
+							},
+						},
+					},
+				},
+			}, nil)
+
+		resp, err := service.GetActionInfo(ctx, req)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(resp, convey.ShouldNotBeNil)
+		convey.So(len(resp.DynamicTools), convey.ShouldEqual, 1)
+
+		fixedParams, ok := resp.DynamicTools[0].FixedParams.(interfaces.ActionDriverFixedParams)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(len(fixedParams.InstanceIdentities), convey.ShouldEqual, 2)
+		convey.So(fixedParams.InstanceIdentities[0]["code"], convey.ShouldEqual, "A")
+		convey.So(fixedParams.InstanceIdentities[1]["code"], convey.ShouldEqual, "B")
+	})
+}
+
+// TestGetActionInfo_InstanceIdentities_FilterEmptyMaps 测试 _instance_identities 中的空 map 被过滤
+func TestGetActionInfo_InstanceIdentities_FilterEmptyMaps(t *testing.T) {
+	convey.Convey("TestGetActionInfo_InstanceIdentities_FilterEmptyMaps", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockLogger := mocks.NewMockLogger(ctrl)
+		mockOntologyQuery := mocks.NewMockDrivenOntologyQuery(ctrl)
+		mockOperatorIntegration := mocks.NewMockDrivenOperatorIntegration(ctrl)
+
+		mockLogger.EXPECT().WithContext(gomock.Any()).Return(mockLogger).AnyTimes()
+
+		cfg := &config.Config{
+			OntologyQuery: config.PrivateBaseConfig{
+				PrivateProtocol: "http",
+				PrivateHost:     "ontology-query",
+				PrivatePort:     13018,
+			},
+		}
+
+		service := &knActionRecallServiceImpl{
+			logger:              mockLogger,
+			config:              cfg,
+			ontologyQuery:       mockOntologyQuery,
+			operatorIntegration: mockOperatorIntegration,
+		}
+
+		ctx := context.Background()
+		req := &interfaces.KnActionRecallRequest{
+			KnID: "kn-001",
+			AtID: "at-001",
+			InstanceIdentities: []map[string]any{
+				{"code": "A"},
+				{},
+				{"code": "C"},
+			},
+		}
+
+		mockOntologyQuery.EXPECT().QueryActions(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, actionsReq *interfaces.QueryActionsRequest) (*interfaces.QueryActionsResponse, error) {
+				convey.So(len(actionsReq.InstanceIdentities), convey.ShouldEqual, 2)
+				convey.So(actionsReq.InstanceIdentities[0]["code"], convey.ShouldEqual, "A")
+				convey.So(actionsReq.InstanceIdentities[1]["code"], convey.ShouldEqual, "C")
+				return &interfaces.QueryActionsResponse{
+					ActionSource: &interfaces.ActionSource{
+						Type:   interfaces.ActionSourceTypeTool,
+						BoxID:  "box-001",
+						ToolID: "tool-001",
+					},
+					Actions: []interfaces.ActionParams{
+						{Parameters: map[string]any{"param1": "value1"}},
+					},
+				}, nil
+			})
+
+		mockOperatorIntegration.EXPECT().GetToolDetail(gomock.Any(), gomock.Any()).
+			Return(&interfaces.GetToolDetailResponse{
+				Name:        "TestTool",
+				Description: "Test tool description",
+				Metadata: interfaces.ToolMetadata{
+					APISpec: map[string]any{
+						"parameters": []any{
+							map[string]any{
+								"name":     "pod_name",
+								"in":       "query",
+								"required": true,
+								"schema":   map[string]any{"type": "string"},
+							},
+						},
+					},
+				},
+			}, nil)
+
+		resp, err := service.GetActionInfo(ctx, req)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(resp, convey.ShouldNotBeNil)
+
+		fixedParams, ok := resp.DynamicTools[0].FixedParams.(interfaces.ActionDriverFixedParams)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(len(fixedParams.InstanceIdentities), convey.ShouldEqual, 2)
+	})
+}
+
+// TestGetActionInfo_InstanceIdentities_PriorityOverIdentity 测试同时传两者时 _instance_identities 优先
+func TestGetActionInfo_InstanceIdentities_PriorityOverIdentity(t *testing.T) {
+	convey.Convey("TestGetActionInfo_InstanceIdentities_PriorityOverIdentity", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockLogger := mocks.NewMockLogger(ctrl)
+		mockOntologyQuery := mocks.NewMockDrivenOntologyQuery(ctrl)
+		mockOperatorIntegration := mocks.NewMockDrivenOperatorIntegration(ctrl)
+
+		mockLogger.EXPECT().WithContext(gomock.Any()).Return(mockLogger).AnyTimes()
+
+		cfg := &config.Config{
+			OntologyQuery: config.PrivateBaseConfig{
+				PrivateProtocol: "http",
+				PrivateHost:     "ontology-query",
+				PrivatePort:     13018,
+			},
+		}
+
+		service := &knActionRecallServiceImpl{
+			logger:              mockLogger,
+			config:              cfg,
+			ontologyQuery:       mockOntologyQuery,
+			operatorIntegration: mockOperatorIntegration,
+		}
+
+		ctx := context.Background()
+		req := &interfaces.KnActionRecallRequest{
+			KnID:             "kn-001",
+			AtID:             "at-001",
+			InstanceIdentity: map[string]any{"id": "should-be-ignored"},
+			InstanceIdentities: []map[string]any{
+				{"id": "from-identities-1"},
+				{"id": "from-identities-2"},
+			},
+		}
+
+		mockOntologyQuery.EXPECT().QueryActions(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, actionsReq *interfaces.QueryActionsRequest) (*interfaces.QueryActionsResponse, error) {
+				convey.So(len(actionsReq.InstanceIdentities), convey.ShouldEqual, 2)
+				convey.So(actionsReq.InstanceIdentities[0]["id"], convey.ShouldEqual, "from-identities-1")
+				convey.So(actionsReq.InstanceIdentities[1]["id"], convey.ShouldEqual, "from-identities-2")
+				return &interfaces.QueryActionsResponse{
+					ActionSource: &interfaces.ActionSource{
+						Type:   interfaces.ActionSourceTypeTool,
+						BoxID:  "box-001",
+						ToolID: "tool-001",
+					},
+					Actions: []interfaces.ActionParams{
+						{Parameters: map[string]any{"param1": "value1"}},
+					},
+				}, nil
+			})
+
+		mockOperatorIntegration.EXPECT().GetToolDetail(gomock.Any(), gomock.Any()).
+			Return(&interfaces.GetToolDetailResponse{
+				Name:        "TestTool",
+				Description: "Test tool description",
+				Metadata: interfaces.ToolMetadata{
+					APISpec: map[string]any{
+						"parameters": []any{
+							map[string]any{
+								"name":     "pod_name",
+								"in":       "query",
+								"required": true,
+								"schema":   map[string]any{"type": "string"},
+							},
+						},
+					},
+				},
+			}, nil)
+
+		resp, err := service.GetActionInfo(ctx, req)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(resp, convey.ShouldNotBeNil)
+
+		fixedParams, ok := resp.DynamicTools[0].FixedParams.(interfaces.ActionDriverFixedParams)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(len(fixedParams.InstanceIdentities), convey.ShouldEqual, 2)
+		convey.So(fixedParams.InstanceIdentities[0]["id"], convey.ShouldEqual, "from-identities-1")
+	})
+}
+
+// TestGetActionInfo_InstanceIdentities_AllEmpty 测试 _instance_identities 全部为空 map
+func TestGetActionInfo_InstanceIdentities_AllEmpty(t *testing.T) {
+	convey.Convey("TestGetActionInfo_InstanceIdentities_AllEmpty", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockLogger := mocks.NewMockLogger(ctrl)
+		mockOntologyQuery := mocks.NewMockDrivenOntologyQuery(ctrl)
+		mockOperatorIntegration := mocks.NewMockDrivenOperatorIntegration(ctrl)
+
+		mockLogger.EXPECT().WithContext(gomock.Any()).Return(mockLogger).AnyTimes()
+
+		cfg := &config.Config{
+			OntologyQuery: config.PrivateBaseConfig{
+				PrivateProtocol: "http",
+				PrivateHost:     "ontology-query",
+				PrivatePort:     13018,
+			},
+		}
+
+		service := &knActionRecallServiceImpl{
+			logger:              mockLogger,
+			config:              cfg,
+			ontologyQuery:       mockOntologyQuery,
+			operatorIntegration: mockOperatorIntegration,
+		}
+
+		ctx := context.Background()
+		req := &interfaces.KnActionRecallRequest{
+			KnID: "kn-001",
+			AtID: "at-001",
+			InstanceIdentities: []map[string]any{
+				{},
+				{},
+			},
+		}
+
+		mockOntologyQuery.EXPECT().QueryActions(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, actionsReq *interfaces.QueryActionsRequest) (*interfaces.QueryActionsResponse, error) {
+				convey.So(len(actionsReq.InstanceIdentities), convey.ShouldEqual, 0)
+				return &interfaces.QueryActionsResponse{
+					ActionSource: &interfaces.ActionSource{
+						Type:   interfaces.ActionSourceTypeTool,
+						BoxID:  "box-001",
+						ToolID: "tool-001",
+					},
+					Actions: []interfaces.ActionParams{
+						{Parameters: map[string]any{"param1": "value1"}},
+					},
+				}, nil
+			})
+
+		mockOperatorIntegration.EXPECT().GetToolDetail(gomock.Any(), gomock.Any()).
+			Return(&interfaces.GetToolDetailResponse{
+				Name:        "TestTool",
+				Description: "Test tool description",
+				Metadata: interfaces.ToolMetadata{
+					APISpec: map[string]any{
+						"parameters": []any{
+							map[string]any{
+								"name":     "pod_name",
+								"in":       "query",
+								"required": true,
+								"schema":   map[string]any{"type": "string"},
+							},
+						},
+					},
+				},
+			}, nil)
+
+		resp, err := service.GetActionInfo(ctx, req)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(resp, convey.ShouldNotBeNil)
+
+		fixedParams, ok := resp.DynamicTools[0].FixedParams.(interfaces.ActionDriverFixedParams)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(len(fixedParams.InstanceIdentities), convey.ShouldEqual, 0)
+	})
+}
+
+// TestGetActionInfo_InstanceIdentities_FallbackToIdentity 测试未传 _instance_identities 时回退到 _instance_identity
+func TestGetActionInfo_InstanceIdentities_FallbackToIdentity(t *testing.T) {
+	convey.Convey("TestGetActionInfo_InstanceIdentities_FallbackToIdentity", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockLogger := mocks.NewMockLogger(ctrl)
+		mockOntologyQuery := mocks.NewMockDrivenOntologyQuery(ctrl)
+		mockOperatorIntegration := mocks.NewMockDrivenOperatorIntegration(ctrl)
+
+		mockLogger.EXPECT().WithContext(gomock.Any()).Return(mockLogger).AnyTimes()
+
+		cfg := &config.Config{
+			OntologyQuery: config.PrivateBaseConfig{
+				PrivateProtocol: "http",
+				PrivateHost:     "ontology-query",
+				PrivatePort:     13018,
+			},
+		}
+
+		service := &knActionRecallServiceImpl{
+			logger:              mockLogger,
+			config:              cfg,
+			ontologyQuery:       mockOntologyQuery,
+			operatorIntegration: mockOperatorIntegration,
+		}
+
+		ctx := context.Background()
+		req := &interfaces.KnActionRecallRequest{
+			KnID:             "kn-001",
+			AtID:             "at-001",
+			InstanceIdentity: map[string]any{"id": "legacy-obj-001"},
+		}
+
+		mockOntologyQuery.EXPECT().QueryActions(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, actionsReq *interfaces.QueryActionsRequest) (*interfaces.QueryActionsResponse, error) {
+				convey.So(len(actionsReq.InstanceIdentities), convey.ShouldEqual, 1)
+				convey.So(actionsReq.InstanceIdentities[0]["id"], convey.ShouldEqual, "legacy-obj-001")
+				return &interfaces.QueryActionsResponse{
+					ActionSource: &interfaces.ActionSource{
+						Type:   interfaces.ActionSourceTypeTool,
+						BoxID:  "box-001",
+						ToolID: "tool-001",
+					},
+					Actions: []interfaces.ActionParams{
+						{Parameters: map[string]any{"param1": "value1"}},
+					},
+				}, nil
+			})
+
+		mockOperatorIntegration.EXPECT().GetToolDetail(gomock.Any(), gomock.Any()).
+			Return(&interfaces.GetToolDetailResponse{
+				Name:        "TestTool",
+				Description: "Test tool description",
+				Metadata: interfaces.ToolMetadata{
+					APISpec: map[string]any{
+						"parameters": []any{
+							map[string]any{
+								"name":     "pod_name",
+								"in":       "query",
+								"required": true,
+								"schema":   map[string]any{"type": "string"},
+							},
+						},
+					},
+				},
+			}, nil)
+
+		resp, err := service.GetActionInfo(ctx, req)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(resp, convey.ShouldNotBeNil)
+
+		fixedParams, ok := resp.DynamicTools[0].FixedParams.(interfaces.ActionDriverFixedParams)
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(len(fixedParams.InstanceIdentities), convey.ShouldEqual, 1)
+		convey.So(fixedParams.InstanceIdentities[0]["id"], convey.ShouldEqual, "legacy-obj-001")
+	})
 }

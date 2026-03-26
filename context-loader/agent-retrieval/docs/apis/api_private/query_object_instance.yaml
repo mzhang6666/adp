@@ -12,20 +12,19 @@ paths:
       parameters:
         - name: x-account-id
           in: header
-          required: true
+          required: false
           schema:
             type: string
           description: 账户ID，用于内部服务调用时传递账户信息
         - name: x-account-type
           in: header
-          required: true
+          required: false
           schema:
             type: string
             enum:
               - user
               - app
               - anonymous
-            default: user
           description: 账户类型：user(用户), app(应用), anonymous(匿名)
         - name: kn_id
           description: 业务知识网络ID
@@ -39,11 +38,6 @@ paths:
             type: string
           in: query
           required: true
-        - name: include_type_info
-          description: "是否包含对象类信息, 默认false，不包含"
-          schema:
-            type: boolean
-          in: query
         - name: include_logic_params
           description: 包含逻辑属性的计算参数，默认false，返回结果不包含逻辑属性的字段和值
           schema:
@@ -183,13 +177,8 @@ components:
         limit:
           description: 返回的数量，默认值 10。范围 1-10000
           type: integer
-        need_total:
-          description: 是否需要总数，默认false
-          type: boolean
     FirstQueryWithSearchAfter:
       description: 分页查询的第一次查询请求
-      required:
-      - limit
       type: object
       properties:
         condition:
@@ -201,8 +190,9 @@ components:
             $ref: '#/components/schemas/Sort'
           description: 排序字段，默认使用 @timestamp排序，排序方向为 desc
         limit:
-          description: 返回的数量，默认值 10。范围 1-100
+          description: 返回的数量，默认值 10。范围 1-10000
           type: integer
+          default: 10
         need_total:
           description: 是否需要总数，默认false
           type: boolean

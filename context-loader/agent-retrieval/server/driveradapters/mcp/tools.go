@@ -16,6 +16,7 @@ import (
 
 	"github.com/kweaver-ai/adp/context-loader/agent-retrieval/server/infra/common"
 	"github.com/kweaver-ai/adp/context-loader/agent-retrieval/server/infra/errors"
+	"github.com/kweaver-ai/adp/context-loader/agent-retrieval/server/infra/rest"
 	"github.com/kweaver-ai/adp/context-loader/agent-retrieval/server/interfaces"
 	logicsKqs "github.com/kweaver-ai/adp/context-loader/agent-retrieval/server/logics/knquerysubgraph"
 	"github.com/kweaver-ai/adp/context-loader/agent-retrieval/server/logics/knsearch"
@@ -133,8 +134,13 @@ func handleKnSchemaSearch(service interfaces.IKnRetrievalService) func(ctx conte
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		if searchReq.ReturnQueryUnderstanding != nil && !*searchReq.ReturnQueryUnderstanding {
-			resp.QueryUnderstanding = nil
+		resp.QueryUnderstanding = nil
+		resp.HitsTotal = 0
+		for i := range resp.KnowledgeConcepts {
+			resp.KnowledgeConcepts[i].IntentScore = 0
+			resp.KnowledgeConcepts[i].MatchScore = 0
+			resp.KnowledgeConcepts[i].RerankScore = 0
+			resp.KnowledgeConcepts[i].Samples = nil
 		}
 		result, err := BuildMCPToolResult(resp, format)
 		if err != nil {
@@ -162,7 +168,7 @@ func handleQueryObjectInstance(ontologyQuery interfaces.DrivenOntologyQuery) fun
 			queryReq.KnID = getKnIDFromHeader(req)
 		}
 		queryReq.OtID = getStringArg(req, "ot_id", queryReq.OtID)
-		queryReq.IncludeTypeInfo = req.GetBool("include_type_info", queryReq.IncludeTypeInfo)
+		queryReq.IncludeTypeInfo = false
 		queryReq.IncludeLogicParams = req.GetBool("include_logic_params", queryReq.IncludeLogicParams)
 		if queryReq.Limit == 0 {
 			queryReq.Limit = 10
@@ -178,6 +184,7 @@ func handleQueryObjectInstance(ontologyQuery interfaces.DrivenOntologyQuery) fun
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
+		resp.ObjectConcept = nil
 		result, err := BuildMCPToolResult(resp, format)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
@@ -236,9 +243,7 @@ func handleGetLogicPropertiesValues(service interfaces.IKnLogicPropertyResolverS
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		resolveReq := &interfaces.ResolveLogicPropertiesRequest{
-			Options: &interfaces.ResolveOptions{},
-		}
+		resolveReq := &interfaces.ResolveLogicPropertiesRequest{}
 		if err := bindArguments(req, resolveReq); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -248,8 +253,10 @@ func handleGetLogicPropertiesValues(service interfaces.IKnLogicPropertyResolverS
 		resolveReq.AccountID = authCtx.AccountID
 		resolveReq.AccountType = string(authCtx.AccountType)
 
-		if err := defaults.Set(resolveReq.Options); err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+		resolveReq.Options = &interfaces.ResolveOptions{
+			ReturnDebug:     false,
+			MaxRepairRounds: 1,
+			MaxConcurrency:  4,
 		}
 		if err := validator.New().Struct(resolveReq); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
@@ -274,11 +281,7 @@ func handleGetActionInfo(service interfaces.IKnActionRecallService) func(ctx con
 		if !ok {
 			return mcp.NewToolResultError("authentication required"), nil
 		}
-
-		format, err := GetResponseFormatFromRequest(req)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
+		format := rest.FormatJSON
 
 		actionReq := &interfaces.KnActionRecallRequest{}
 		if err := bindArguments(req, actionReq); err != nil {
