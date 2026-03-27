@@ -121,7 +121,8 @@ func validateFilterCondCfg(ctx context.Context, cfg *interfaces.FilterCondCfg) e
 
 	condFactory, exists := filter_condition.OperationMap[cfg.Operation]
 	if !exists {
-		return rest.NewHTTPError(ctx, http.StatusBadRequest, verrors.VegaBackend_UnsupportFilterConditionOperation)
+		return rest.NewHTTPError(ctx, http.StatusBadRequest, verrors.VegaBackend_UnsupportFilterConditionOperation).
+			WithErrorDetails(fmt.Sprintf("Unsupported filter condition operation: %s", cfg.Operation))
 	}
 
 	if !condFactory.SupportSubCond() {

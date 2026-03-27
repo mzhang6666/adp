@@ -51,6 +51,10 @@ type Resource struct {
 	SourceMetadata   map[string]any `json:"source_metadata,omitempty"`   // 源端配置（JSON）
 	SchemaDefinition []*Property    `json:"schema_definition,omitempty"` // Schema定义
 
+	// 逻辑视图特有的字段
+	LogicType       string                 `json:"logic_type,omitempty"`       // 逻辑类型: derived(衍生), composite(复合)
+	LogicDefinition []*LogicDefinitionNode `json:"logic_definition,omitempty"` // 逻辑定义
+
 	Creator    AccountInfo `json:"creator"`
 	CreateTime int64       `json:"create_time"`
 	Updater    AccountInfo `json:"updater"`
@@ -100,9 +104,10 @@ type ResourceRequest struct {
 
 	Status string `json:"status"`
 
-	Database         string      `json:"database,omitempty"`          // 所属数据库（实例级 Catalog 时填充）
-	SourceIdentifier string      `json:"source_identifier"`           // 源端标识（原始表名/路径）
-	SchemaDefinition []*Property `json:"schema_definition,omitempty"` // Schema定义
+	Database         string                 `json:"database,omitempty"`          // 所属数据库（实例级 Catalog 时填充）
+	SourceIdentifier string                 `json:"source_identifier"`           // 源端标识（原始表名/路径）
+	SchemaDefinition []*Property            `json:"schema_definition,omitempty"` // Schema定义
+	LogicDefinition  []*LogicDefinitionNode `json:"logic_definition,omitempty"`  // 逻辑定义
 
 	IfNameModify   bool      `json:"-"`
 	OriginResource *Resource `json:"-"`

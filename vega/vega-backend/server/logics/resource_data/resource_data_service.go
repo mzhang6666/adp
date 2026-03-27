@@ -20,6 +20,8 @@ import (
 	"vega-backend/logics/connectors/factory"
 	"vega-backend/logics/dataset"
 	"vega-backend/logics/filter_condition"
+	"vega-backend/logics/resource"
+	"vega-backend/logics/resource_data/logic_view"
 )
 
 var (
@@ -31,6 +33,8 @@ type resourceDataService struct {
 	appSetting *common.AppSetting
 	ds         interfaces.DatasetService
 	cs         interfaces.CatalogService
+	rs         interfaces.ResourceService
+	lvs        interfaces.LogicViewService
 }
 
 // NewResourceDataService creates a new ResourceDataService.
@@ -40,6 +44,8 @@ func NewResourceDataService(appSetting *common.AppSetting) interfaces.ResourceDa
 			appSetting: appSetting,
 			ds:         dataset.NewDatasetService(appSetting),
 			cs:         catalog.NewCatalogService(appSetting),
+			rs:         resource.NewResourceService(appSetting),
+			lvs:        logic_view.NewLogicViewService(appSetting),
 		}
 	})
 	return rdService
@@ -79,6 +85,16 @@ func (rds *resourceDataService) Query(ctx context.Context, resource *interfaces.
 		data, total, err := rds.QueryData(ctx, resource, params)
 		if err != nil {
 			span.SetStatus(codes.Error, "Query table data failed")
+			return nil, 0, rest.NewHTTPError(ctx, http.StatusInternalServerError, verrors.VegaBackend_Resource_InternalError).
+				WithErrorDetails(err.Error())
+		}
+		return data, total, nil
+
+	case interfaces.ResourceCategoryLogicView:
+		// 逻辑视图查询数据
+		data, total, err := rds.lvs.Query(ctx, resource, params)
+		if err != nil {
+			span.SetStatus(codes.Error, "Query logic view data failed")
 			return nil, 0, rest.NewHTTPError(ctx, http.StatusInternalServerError, verrors.VegaBackend_Resource_InternalError).
 				WithErrorDetails(err.Error())
 		}
