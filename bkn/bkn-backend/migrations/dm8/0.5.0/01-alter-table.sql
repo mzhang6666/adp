@@ -5,6 +5,9 @@
 
 SET SCHEMA adp;
 
+-- 移除关系类名称唯一性约束，同一 BKN 内允许同名关系类存在
+DROP INDEX IF EXISTS adp.uk_t_relation_type_rt_name;
+
 -- Risk Type
 CREATE TABLE IF NOT EXISTS t_risk_type (
   f_id VARCHAR(40 CHAR) NOT NULL DEFAULT '',
